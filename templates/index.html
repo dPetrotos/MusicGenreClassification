@@ -1,0 +1,32 @@
+{% extends 'base.html' %}
+
+{% block body %}
+    <div class="row justify-content-center">
+        <div class="col-md-6 align-self-center">
+           <form action="/classification" method="POST" enctype="multipart/form-data"   >
+                <div class="mb-3">
+                    <label for="song" class="form-label">Upload a song</label>
+                    <input type="file" class="form-control-file" name="song" accept="audio/*">
+                </div>
+                <div class="mb-3">
+                    <label for="link" class="form-label">Or paste a Youtube link</label>
+                    <input type="url" class="form-control" name="link" required>
+                </div>
+               <div class="mb-3">
+                   <select class="form-select" aria-label="Default select example" name="model_choice" required>
+                       <option value="cnn_kfold" selected>CNN K-Fold</option>
+                       <option value="cnn">CNN</option>
+                       <option value="lstm">LSTM</option>
+                       <option value="gru">GRU</option>
+                       <option value="cnn_mel">CNN-Mel</option>
+                       <option value="all">ALL</option>
+                   </select>
+               </div>
+
+{#                <input type="submit" value="Classify">#}
+                <button type="submit" class="btn btn-primary">Classify</button>
+            </form>
+        </div>
+    </div>
+
+{% endblock %}
