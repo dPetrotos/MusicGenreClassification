@@ -16,6 +16,7 @@ lstm_model = tf.keras.models.load_model('models/saved_models/LSTM')
 gru_model = tf.keras.models.load_model('models/saved_models/GRU')
 cnn_mel_model = tf.keras.models.load_model('models/saved_models/saved_models/CNN-MEL-91,5test')
 cnn_kfold_mfcc_model = tf.keras.models.load_model('models/saved_models/CNN-Kfold-MFCC')
+cnn_kfold_mel_model = tf.keras.models.load_model('models/saved_models/saved_models/CNN-MEL-Kfold')
 
 
 @app.route('/', methods=['POST', 'GET'])
@@ -45,8 +46,13 @@ def classification():
         elif choice == 'gru':
             predictions['gru'] = predict(gru_model, mfcc)
         elif choice == 'cnn_mel':
-            mel = (mel + 12.67344) / 16.546448
-            predictions['cnn_mel'] = predict(cnn_mel_model, mel[..., np.newaxis])
+            # mel = (mel + 12.67344) / 16.546448
+            mean_std_mel = np.load('models/saved_models/saved_models/CNN-MEL-Kfold-mean_std/mean_std.npy')
+            mean = mean_std_mel[0]
+            std = mean_std_mel[1]
+            mel = mel[..., np.newaxis]
+            mel = (mel - mean) / std
+            predictions['cnn_mel'] = predict(cnn_kfold_mel_model, mel)
         elif choice == 'cnn_kfold':
             mean_std = np.load('models/saved_models/CNN-Kfold-MFCC-mean_std/mean_std.npy')
             mean = mean_std[0]
@@ -82,14 +88,14 @@ def preprocess(song):
             hop_length=hop_length,
             dtype=np.float32)
         # m = m.T
-        # mel = librosa.feature.melspectrogram(
-        #     y=y[samples_per_segment * n: samples_per_segment * (n + 1)],
-        #     sr=sr, n_fft=2048, hop_length=hop_length, dtype=np.float32)
-        # mel_db = librosa.power_to_db(mel)
+        mel = librosa.feature.melspectrogram(
+            y=y[samples_per_segment * n: samples_per_segment * (n + 1)],
+            sr=sr, n_fft=2048, hop_length=hop_length, dtype=np.float32)
+        mel_db = librosa.power_to_db(mel)
         if m.shape[1] == math.ceil(samples_per_segment / hop_length):
             mfcc[n] = m
-        # if mel_db.shape[0] == all_mel.shape[1] and mel_db.shape[1] == all_mel.shape[2]:
-        #     all_mel[n] = mel_db
+        if mel_db.shape[0] == all_mel.shape[1] and mel_db.shape[1] == all_mel.shape[2]:
+            all_mel[n] = mel_db
     return mfcc, all_mel
 
 
@@ -98,6 +104,7 @@ def get_audio_from_youtube_video(link):
     audio_stream = yt.streams.filter(only_audio=True, file_extension='mp4').first()
     song_name = yt.title
     song_name = song_name.replace('/', ' ')
+    song_name = song_name.replace("'", ' ')
     song_name = song_name.replace('"', '')
     song_name = song_name.replace('|', '')
     audio_stream.download(filename=f'{song_name}.mp4')
