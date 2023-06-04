@@ -15,13 +15,22 @@ body {
     color: black;
 }
 
-h1{
+h1, h2{
     text-align: center;
-    font-family: Roboto, sans-serif;
+    font-family: Arial, sans-serif !important;
     font-weight: bold !important;
 }
 
 .table{
     font-size: 18px;
     margin-left: 10px;
+}
+
+a{
+    text-decoration: none !important;
+    color: inherit !important;
+}
+
+#prediction{
+    margin-top: 50px;
 }

@@ -1,20 +1,5 @@
 {% extends 'base.html' %}
 
 {% block body %}
-    <table class="table">
-        <tr>
-            <th>CNN K-Fold</th>
-            <th><a class="model-link" href="/model-info/cnn">CNN</a></th>
-            <th>LSTM</th>
-            <th>GRU</th>
-            <th>CNN-Mel</th>
-        </tr>
-        <tr>
-            <td>{{ predictions['cnn_kfold'] }}</td>
-            <td>{{ predictions['cnn'] }}</td>
-            <td>{{ predictions['lstm'] }}</td>
-            <td>{{ predictions['gru'] }}</td>
-            <td>{{ predictions['cnn_mel'] }}</td>
-        </tr>
-    </table>
+<h1>Predicted genre : <span id="prediction">{{ genre }}</span></h1>
 {% endblock %}

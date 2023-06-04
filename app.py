@@ -1,22 +1,24 @@
-from flask import Flask, render_template, url_for, request, redirect
-from flask_sqlalchemy import SQLAlchemy
+import os
+from flask import Flask, render_template, url_for, request, redirect, abort, jsonify
+
 import numpy as np
-import tensorflow as tf
 import keras
 import librosa
 from pytube import YouTube
-import math
-
-
+import re
+import tensorflow as tf
+import time
 
 app = Flask(__name__)
 genres = ['Blues', 'Classical', 'Country', 'Disco', 'HipHop', 'Jazz', 'Metal', 'Pop', 'Reggae', 'Rock']
-cnn_model = tf.keras.models.load_model('models/saved_models/CNN')
-lstm_model = tf.keras.models.load_model('models/saved_models/LSTM')
-gru_model = tf.keras.models.load_model('models/saved_models/GRU')
-cnn_mel_model = tf.keras.models.load_model('models/saved_models/saved_models/CNN-MEL-91,5test')
-cnn_kfold_mfcc_model = tf.keras.models.load_model('models/saved_models/CNN-Kfold-MFCC')
-cnn_kfold_mel_model = tf.keras.models.load_model('models/saved_models/saved_models/CNN-MEL-Kfold')
+cnn_kfold_mfcc_model = tf.keras.models.load_model('models/saved_models/CNN-Kfold-MFCC-final')
+mean_std_mfcc = np.load('models/saved_models/CNN-Kfold-MFCC-final-mean_std/mean_std.npy')
+cnn_kfold_mel_model = tf.keras.models.load_model('models/saved_models/CNN-MEL-Kfold')
+mean_std_mel = np.load('models/saved_models/CNN-MEL-Kfold-mean_std/mean_std.npy')
+
+# Dummy prediction to trigger PTX compilation which will be cached
+dummy_input = np.zeros((1, 20, 130, 1), dtype=np.float32)
+_ = cnn_kfold_mfcc_model.predict(dummy_input)
 
 
 @app.route('/', methods=['POST', 'GET'])
@@ -27,125 +29,90 @@ def index():
         return render_template('index.html')
 
 
-@app.route('/classification', methods=['POST', 'GET'])
+@app.route('/classification', methods=['POST'])
 def classification():
+    downloaded = False
     if request.method == 'POST':
         link = request.form['link']
         if not link:
             song = request.files['song']
-            mfcc, mel = preprocess(song)
         else:
             song_name = get_audio_from_youtube_video(link)
-            mfcc, mel = preprocess(f'{song_name}.mp4')
-        predictions = dict()
+            downloaded = True
+            song = f'songs/{song_name}.mp4'
         choice = request.form['model_choice']
-        if choice == 'cnn':
-            predictions['cnn'] = predict(cnn_model, mfcc[..., np.newaxis])
-        elif choice == 'lstm':
-            predictions['lstm'] = predict(lstm_model, mfcc)
-        elif choice == 'gru':
-            predictions['gru'] = predict(gru_model, mfcc)
-        elif choice == 'cnn_mel':
-            # mel = (mel + 12.67344) / 16.546448
-            mean_std_mel = np.load('models/saved_models/saved_models/CNN-MEL-Kfold-mean_std/mean_std.npy')
-            mean = mean_std_mel[0]
-            std = mean_std_mel[1]
-            mel = mel[..., np.newaxis]
-            mel = (mel - mean) / std
-            predictions['cnn_mel'] = predict(cnn_kfold_mel_model, mel)
-        elif choice == 'cnn_kfold':
-            mean_std = np.load('models/saved_models/CNN-Kfold-MFCC-mean_std/mean_std.npy')
-            mean = mean_std[0]
-            std = mean_std[1]
-            mfcc_cnn_kfold = mfcc[..., np.newaxis]
-            mfcc_cnn_kfold = (mfcc_cnn_kfold - mean) / std
-            predictions['cnn_kfold'] = predict(cnn_kfold_mfcc_model, mfcc_cnn_kfold)
+        start_time = time.time()
+        loaded_song, number_of_segments, samples_per_segment = load_song(song)
+        load_time = time.time() - start_time
+        if choice == 'mel':
+            mel = extract_mel_spectrogram(loaded_song, number_of_segments, samples_per_segment)
+            mel = normalise(mel, mean=mean_std_mel[0], std=mean_std_mel[1])
+            genre = predict(cnn_kfold_mel_model, mel)
         else:
-            predictions['cnn'] = predict(cnn_model, mfcc[..., np.newaxis])
-            predictions['lstm'] = predict(lstm_model, mfcc)
-            predictions['gru'] = predict(gru_model, mfcc)
-            mel = (mel + 12.67344) / 16.546448
-            predictions['cnn_mel'] = predict(cnn_mel_model, mel[..., np.newaxis])
-        return render_template('classification.html', predictions=predictions)
-
-@app.route('/model-info/<string:model>')
-def model_info(model):
-    return render_template(model + '.html')
-
-def preprocess(song):
-    sample_rate = 22050
-    y, sr = librosa.load(path=song, sr=sample_rate)
-    duration = librosa.get_duration(y=y, sr=sr)
-    number_of_segments = int(duration / (30 / 10))
-    samples_per_segment = int((30 / 10) * sr)
-    hop_length = 512
-    mfcc = np.empty(shape=(number_of_segments, 20, 130), dtype=np.float32)
-    all_mel = np.empty([number_of_segments, 128, 130], dtype=np.float32)
-    for n in range(number_of_segments):
-        m = librosa.feature.mfcc(
-            y=y[samples_per_segment * n: samples_per_segment * (n + 1)],
-            sr=sr, n_mfcc=20, n_fft=2048,
-            hop_length=hop_length,
-            dtype=np.float32)
-        # m = m.T
-        mel = librosa.feature.melspectrogram(
-            y=y[samples_per_segment * n: samples_per_segment * (n + 1)],
-            sr=sr, n_fft=2048, hop_length=hop_length, dtype=np.float32)
-        mel_db = librosa.power_to_db(mel)
-        if m.shape[1] == math.ceil(samples_per_segment / hop_length):
-            mfcc[n] = m
-        if mel_db.shape[0] == all_mel.shape[1] and mel_db.shape[1] == all_mel.shape[2]:
-            all_mel[n] = mel_db
-    return mfcc, all_mel
+            mfcc = extract_mfcc(loaded_song, number_of_segments, samples_per_segment)
+            mfcc = normalise(mfcc, mean=mean_std_mfcc[0], std=mean_std_mfcc[1])
+            genre = predict(cnn_kfold_mfcc_model, mfcc)
+        print('Load time = {:.2f}'.format(load_time))
+        if downloaded:
+            os.remove(f'{song}')
+        return jsonify(genre=genre)
 
 
 def get_audio_from_youtube_video(link):
     yt = YouTube(link)
     audio_stream = yt.streams.filter(only_audio=True, file_extension='mp4').first()
     song_name = yt.title
-    song_name = song_name.replace('/', ' ')
-    song_name = song_name.replace("'", ' ')
-    song_name = song_name.replace('"', '')
-    song_name = song_name.replace('|', '')
-    audio_stream.download(filename=f'{song_name}.mp4')
+    song_name = clean_song_name(song_name)
+    audio_stream.download(output_path='songs', filename=f'{song_name}.mp4')
     return song_name
 
 
-def predict(model, mfcc):
-    # predicted_segment_index = np.empty(shape=mfcc.shape[0])
-    # print(str(mfcc.shape))
-    # for n, segment in enumerate(mfcc):
-    #     print("segment shape : ", segment.shape)
-    #     segment = segment[np.newaxis, ...]
-    #     print("segment shape : ", segment.shape)
-    #     segment_prediction = model.predict(segment)
-    #     print("n = ", n)
-    #     print("segment prediction", str(np.argmax(segment_prediction, axis=1)))
-    #     predicted_segment_index[n] = np.argmax(segment_prediction, axis=1)[0]
-    # print(predicted_segment_index.astype(int))
-    # final_prediction = np.argmax(np.bincount(predicted_segment_index.astype(int)))
-    predictions = model.predict(mfcc, batch_size=32)
+def clean_song_name(song_name):
+    pattern = r'[<>:"\'/\\|?*\x00-\x1F]'
+    return re.sub(pattern, ' ', song_name)
+
+
+def load_song(song):
+    loaded_song, sr = librosa.load(path=song, sr=22050, dtype=np.float32)
+    duration = librosa.get_duration(y=loaded_song, sr=sr)
+    number_of_segments = int(duration / 3)
+    samples_per_segment = int(3 * sr)
+    return loaded_song, number_of_segments, samples_per_segment
+
+
+def extract_mel_spectrogram(loaded_song, number_of_segments, samples_per_segment):
+    all_mel = np.empty([number_of_segments, 128, 130], dtype=np.float32)
+    for n in range(number_of_segments):
+        mel = librosa.feature.melspectrogram(y=loaded_song[samples_per_segment * n: samples_per_segment * (n + 1)],
+                                             dtype=np.float32)
+        mel_db = librosa.power_to_db(mel)
+        if mel_db.shape[0] == all_mel.shape[1] and mel_db.shape[1] == all_mel.shape[2]:
+            all_mel[n] = mel_db
+    all_mel = all_mel[..., np.newaxis]
+    return all_mel
+
+
+def extract_mfcc(loaded_song, number_of_segments, samples_per_segment):
+    all_mfcc = np.empty(shape=(number_of_segments, 20, 130), dtype=np.float32)
+    for n in range(number_of_segments):
+        mfcc = librosa.feature.mfcc(y=loaded_song[samples_per_segment * n: samples_per_segment * (n + 1)],
+                                    dtype=np.float32)
+        if mfcc.shape[0] == all_mfcc.shape[1] and mfcc.shape[1] == all_mfcc.shape[2]:
+            all_mfcc[n] = mfcc
+    all_mfcc = all_mfcc[..., np.newaxis]
+    return all_mfcc
+
+
+def normalise(data, mean, std):
+    return (data - mean) / std if std != 0 else data
+
+
+def predict(model, data):
+    predictions = model.predict(data, batch_size=32)
     predictions = np.argmax(predictions, axis=1)
-    print(predictions)
     final_prediction = np.argmax(np.bincount(predictions.astype(int)))
     return genres[final_prediction]
 
-# For LSTM
-# def predict(model, mfcc):
-#     predicted_index = np.empty(shape=mfcc.shape[2])
-#     print(mfcc.shape[2], 'shape')
-#     mfcc = mfcc[np.newaxis, ...]
-#     for segment in range(mfcc.shape[3]):
-#         print(str(mfcc.shape))
-#         print(str(mfcc[:, :, :, segment].shape))
-#         segment_prediction = model.predict(mfcc[:, :, :, segment])
-#         print(str(np.argmax(segment_prediction, axis=1)))
-#         predicted_index[segment] = np.argmax(segment_prediction, axis=1)
-#     print(predicted_index.astype(int))
-#     final_prediction = np.argmax(np.bincount(predicted_index.astype(int)))
-#
-#     return genres[final_prediction]
-
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=False)
