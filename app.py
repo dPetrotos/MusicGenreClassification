@@ -1,5 +1,5 @@
 import os
-from flask import Flask, render_template, url_for, request, redirect, abort, jsonify
+from flask import Flask, render_template, request, jsonify
 
 import numpy as np
 import keras
@@ -8,6 +8,8 @@ from pytube import YouTube
 import re
 import tensorflow as tf
 import time
+
+from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 genres = ['Blues', 'Classical', 'Country', 'Disco', 'HipHop', 'Jazz', 'Metal', 'Pop', 'Reggae', 'Rock']
@@ -31,14 +33,15 @@ def index():
 
 @app.route('/classification', methods=['POST'])
 def classification():
-    downloaded = False
     if request.method == 'POST':
         link = request.form['link']
         if not link:
-            song = request.files['song']
+            audio_file = request.files['song']
+            song_name = secure_filename(audio_file.filename)
+            song = f'songs/{song_name}'
+            audio_file.save(song)
         else:
             song_name = get_audio_from_youtube_video(link)
-            downloaded = True
             song = f'songs/{song_name}.mp4'
         choice = request.form['model_choice']
         start_time = time.time()
@@ -53,8 +56,7 @@ def classification():
             mfcc = normalise(mfcc, mean=mean_std_mfcc[0], std=mean_std_mfcc[1])
             genre = predict(cnn_kfold_mfcc_model, mfcc)
         print('Load time = {:.2f}'.format(load_time))
-        if downloaded:
-            os.remove(f'{song}')
+        os.remove(song)
         return jsonify(genre=genre)
 
 
